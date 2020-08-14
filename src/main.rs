@@ -61,6 +61,13 @@ impl ops::Sub<Vec3> for Vec3 {
     }
 }
 
+impl ops::Neg for Vec3 {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Vec3 { x: self.x * -1., y: self.y * -1., z: self.z * -1. }
+    }
+}
+
 struct Ray {
     origin: Vec3,
     dir: Vec3,
@@ -81,15 +88,19 @@ struct PointLight {
 struct Material { 
     color: Vec3,
     phong_exp: f32,
+    phong_const: f32,
+    diffuse_const: f32,
+    ambient_const: f32,
+    reflectance: f32,
 }
 
 impl Material {
     fn blank() -> Self {
-        Material { color: Vec3::new(0., 0., 0.), phong_exp: 0. }
+        Material { color: Vec3::new(0., 0., 0.), phong_exp: 0., phong_const: 0., diffuse_const: 0., ambient_const: 0., reflectance: 0. }
     }
 
-    fn new(color: Vec3, phong_exp: f32) -> Self {
-        Material { color, phong_exp }
+    fn new(color: Vec3, phong_exp: f32, phong_const: f32, diffuse_const: f32, ambient_const: f32, reflectance: f32) -> Self {
+        Material { color, phong_exp, phong_const, diffuse_const, ambient_const, reflectance }
     }
 }
 
@@ -151,16 +162,20 @@ fn scene_hit(ray: &Ray, scene: &Scene, max_dist: f32) -> Option<RaycastHit> {
 }
 
 // Cast a ray and return the pixel color as a Vec3
-fn raycast(ray: &Ray, scene: &Scene) -> Vec3 {
-    match scene_hit(ray, scene, 1000.) {
-        None => Vec3 { x: 0.1, y: 0.1, z: 0.1 }, // Miss; background color
-        Some(hit_info) => {
+fn raycast(ray: &Ray, scene: &Scene, depth: i32) -> Vec3 {
+    if depth < 4 {
+        if let Some(hit_info) = scene_hit(ray, scene, 1000.) {
             let surface_mat = hit_info.mat;
             let surface_point = hit_info.point;
             let surface_normal = hit_info.normal;
-
             let mut diffuse_intensity = 0.;
             let mut specular_intensity = 0.;
+
+            // Reflect
+            let reflect_dir = -ray.dir.reflect_on(&surface_normal).normalized();
+            let reflect_point = surface_point + surface_normal * 0.00001;
+            let reflect_color = raycast(&Ray { origin: reflect_point, dir: reflect_dir }, &scene, depth + 1);  
+
             for light in &scene.lights {
                 let light_vec = light.origin - surface_point;
                 let light_dir = light_vec.normalized();
@@ -176,9 +191,10 @@ fn raycast(ray: &Ray, scene: &Scene) -> Vec3 {
                 specular_intensity += (light_dir.reflect_on(&surface_normal) * ray.dir).min(0.).powf(surface_mat.phong_exp) * light.intensity;
             }
 
-            surface_mat.color * diffuse_intensity + Vec3::new(1., 1., 1.) * specular_intensity
-        },
+            return surface_mat.color * diffuse_intensity * surface_mat.diffuse_const + Vec3::new(1., 1., 1.) * specular_intensity * surface_mat.phong_const + surface_mat.color * surface_mat.ambient_const + reflect_color * surface_mat.reflectance;
+        }
     }
+    return Vec3::new(0.3, 0.3, 0.3); // Background color
 }
 
 fn main() -> std::io::Result<()> {
@@ -187,14 +203,15 @@ fn main() -> std::io::Result<()> {
     let fov = std::f32::consts::PI / 3.;
 
     // Scene construction
-    let m_blue = Material::new(Vec3::new(0.1, 0.1, 0.4), 10.);
-    let m_red = Material::new(Vec3::new(0.7, 0.02, 0.05), 250.);
+    let m_blue = Material::new(Vec3::new(0.1, 0.1, 0.4), 50., 0.4, 1., 0.1, 0.0);
+    let m_red = Material::new(Vec3::new(0.7, 0.02, 0.05), 250., 1., 1.2, 0.2, 0.);
+    let m_mirror = Material::new(Vec3::new(1., 1., 1.), 1500., 1., 0., 0., 0.7);
     let mut spheres = Vec::new();
     spheres.push(Sphere::new(Vec3::new(0., -1.25, -5.), 1., m_blue));
-    spheres.push(Sphere::new(Vec3::new(-2., -0.75, -7.), 1.2, m_red));
-    spheres.push(Sphere::new(Vec3::new(1., 0.75, -3.), 1., m_red));
+    spheres.push(Sphere::new(Vec3::new(-2., -0.75, -7.), 1.2, m_mirror));
+    spheres.push(Sphere::new(Vec3::new(0.8, 0.45, -4.), 1., m_red));
     let mut lights = Vec::new();
-    lights.push(PointLight { origin: Vec3::new(12., 12., 10.), intensity: 0.8 });
+    lights.push(PointLight { origin: Vec3::new(8., 8., 10.), intensity: 0.8 });
     lights.push(PointLight { origin: Vec3::new(-3., 4., 5.), intensity: 0.65 });
     let scene = Scene { spheres: spheres, lights: lights };
 
@@ -207,7 +224,7 @@ fn main() -> std::io::Result<()> {
             let y = (fov / 2.).tan() * -(2. * (h + 0.5) / height as f32 - 1.);
             let z = -1.;
             let dir = Vec3::new(x, y, z).normalized();
-            data.push(raycast(&Ray { origin: Vec3::origin(), dir: dir }, &scene));
+            data.push(raycast(&Ray { origin: Vec3::origin(), dir: dir }, &scene, 0));
         }
     }
 
