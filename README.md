@@ -7,9 +7,3 @@ $ cd rust-tracer
 $ cargo run
 ```
 The program will output a rendering to a plain .ppm file.
-
-## Todo
-- Shadows
-- Reflections
-- Diffractions
-- Depth of field
