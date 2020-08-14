@@ -18,12 +18,12 @@ impl Vec3 {
         (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
     }
 
-    fn normalized(&self) -> Vec3 {
+    fn normalized(&self) -> Self {
         let mag = self.mag();
         Vec3 { x: self.x / mag, y: self.y / mag, z: self.z / mag }
     }
 
-    fn reflect_on(&self, n: &Vec3) -> Vec3 {
+    fn reflect_on(&self, n: &Vec3) -> Self {
         *n * 2. * (*self * *n)  - *self
     }
 
@@ -42,21 +42,21 @@ impl ops::Mul<Vec3> for Vec3 {
 
 impl ops::Mul<f32> for Vec3 {
     type Output = Vec3;
-    fn mul(self, f: f32) -> Vec3 {
+    fn mul(self, f: f32) -> Self {
         Vec3 { x: f * self.x, y: f * self.y, z: f * self.z }
     }
 }
 
 impl ops::Add<Vec3> for Vec3 {
     type Output = Vec3;
-    fn add(self, v: Vec3) -> Vec3 {
+    fn add(self, v: Vec3) -> Self {
         Vec3 { x: self.x + v.x, y: self.y + v.y, z: self.z + v.z }
     }
 }
 
 impl ops::Sub<Vec3> for Vec3 {
     type Output = Vec3;
-    fn sub(self, v: Vec3) -> Vec3 {
+    fn sub(self, v: Vec3) -> Self {
         Vec3 { x: self.x - v.x, y: self.y - v.y, z: self.z - v.z }
     }
 }
@@ -64,6 +64,12 @@ impl ops::Sub<Vec3> for Vec3 {
 struct Ray {
     origin: Vec3,
     dir: Vec3,
+}
+
+struct RaycastHit {
+    point: Vec3,
+    normal: Vec3,
+    mat: Material,
 }
 
 struct PointLight {
@@ -94,7 +100,7 @@ struct Sphere {
 }
 
 impl Sphere {
-    fn new(c: Vec3, r: f32, m: Material) -> Sphere {
+    fn new(c: Vec3, r: f32, m: Material) -> Self {
         Sphere { center: c, radius: r, mat: m }
     }
 
@@ -118,24 +124,78 @@ struct Scene {
     lights: Vec<PointLight>,
 }
 
+// Returns RaycastHit with info or None if there is no intersection
+fn scene_hit(ray: &Ray, scene: &Scene, max_dist: f32) -> Option<RaycastHit> {
+    let mut min_dist = f32::MAX;
+    let mut surface_mat = Material::blank();
+    let mut surface_point = Vec3::origin();
+    let mut surface_normal = Vec3::origin();
+
+    for sphere in &scene.spheres {
+        let mut cur_dist = 0.;
+        if sphere.intersects_ray(ray, &mut cur_dist) && cur_dist < min_dist {
+            min_dist = cur_dist;
+            surface_mat = sphere.mat;
+            surface_point = ray.origin + ray.dir * cur_dist;
+            surface_normal = (surface_point - sphere.center).normalized();
+        }
+    }
+    if min_dist < max_dist { // Max draw distance
+        return Some(RaycastHit {
+            point: surface_point,
+            normal: surface_normal,
+            mat: surface_mat,
+        });
+    }
+    return None;
+}
+
+// Cast a ray and return the pixel color as a Vec3
+fn raycast(ray: &Ray, scene: &Scene) -> Vec3 {
+    match scene_hit(ray, scene, 1000.) {
+        None => Vec3 { x: 0.1, y: 0.1, z: 0.1 }, // Miss; background color
+        Some(hit_info) => {
+            let surface_mat = hit_info.mat;
+            let surface_point = hit_info.point;
+            let surface_normal = hit_info.normal;
+
+            let mut diffuse_intensity = 0.;
+            let mut specular_intensity = 0.;
+            for light in &scene.lights {
+                let light_vec = light.origin - surface_point;
+                let light_dir = light_vec.normalized();
+                let light_dist = light_vec.mag();
+
+                // Check for shadow
+                let shadow_point = surface_point + surface_normal * 0.00001;
+                if let Some(_hit) = scene_hit(&Ray { origin: shadow_point, dir: light_dir }, scene, light_dist) {
+                    continue;
+                }
+
+                diffuse_intensity += (light_dir * surface_normal).max(0.) * light.intensity;
+                specular_intensity += (light_dir.reflect_on(&surface_normal) * ray.dir).min(0.).powf(surface_mat.phong_exp) * light.intensity;
+            }
+
+            surface_mat.color * diffuse_intensity + Vec3::new(1., 1., 1.) * specular_intensity
+        },
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let width = 500;
     let height = 500;
     let fov = std::f32::consts::PI / 3.;
 
     // Scene construction
-    let m_blue = Material::new(Vec3::new(0., 0., 1.), 10.);
-    let m_red = Material::new(Vec3::new(1., 0., 0.), 250.);
-    let s_small = Sphere::new(Vec3::new(0., -1.25, -5.), 1., m_blue);
-    let s_mediu = Sphere::new(Vec3::new(-2., -0.75, -7.), 1.2, m_red);
-    let s_large = Sphere::new(Vec3::new(1., 0.75, -3.), 1., m_red);
+    let m_blue = Material::new(Vec3::new(0.1, 0.1, 0.4), 10.);
+    let m_red = Material::new(Vec3::new(0.7, 0.02, 0.05), 250.);
     let mut spheres = Vec::new();
-    spheres.push(s_small);
-    spheres.push(s_mediu);
-    spheres.push(s_large);
-    let light_1 = PointLight { origin: Vec3::new(3., 3., 1.5), intensity: 0.8 };
+    spheres.push(Sphere::new(Vec3::new(0., -1.25, -5.), 1., m_blue));
+    spheres.push(Sphere::new(Vec3::new(-2., -0.75, -7.), 1.2, m_red));
+    spheres.push(Sphere::new(Vec3::new(1., 0.75, -3.), 1., m_red));
     let mut lights = Vec::new();
-    lights.push(light_1);
+    lights.push(PointLight { origin: Vec3::new(12., 12., 10.), intensity: 0.8 });
+    lights.push(PointLight { origin: Vec3::new(-3., 4., 5.), intensity: 0.65 });
     let scene = Scene { spheres: spheres, lights: lights };
 
     let mut data = Vec::new();
@@ -155,44 +215,12 @@ fn main() -> std::io::Result<()> {
     buffer.push_str(&format!("P3\n{} {}\n255\n", width, height));
     for d in data {
         buffer.push_str(&format!("{} {} {}\n", 
-            ((d.x * 255.) as u8), 
-            ((d.y * 255.) as u8), 
-            ((d.z * 255.) as u8)));
+            ((d.x.min(1.) * 255.) as u8), 
+            ((d.y.min(1.) * 255.) as u8), 
+            ((d.z.min(1.) * 255.) as u8)));
     }
     let mut file = File::create("render.ppm")?;
     file.write_all(&buffer.as_bytes())?;
 
     Ok(())
-}
-
-// Cast a ray and return the pixel color as a Vec3
-fn raycast(ray: &Ray, scene: &Scene) -> Vec3 {
-    let mut min_dist = f32::MAX;
-    let mut surface_mat = Material::blank();
-    let mut surface_point = Vec3::origin();
-    let mut surface_normal = Vec3::origin();
-
-    // Find hit
-    for obj in &scene.spheres {
-        let mut cur_dist = 0.;
-        if obj.intersects_ray(ray, &mut cur_dist) && cur_dist < min_dist {
-            min_dist = cur_dist;
-            surface_mat = obj.mat;
-            surface_point = ray.origin + ray.dir * cur_dist;
-            surface_normal = (surface_point - obj.center).normalized();
-        }
-    }
-
-    // Calculate Phong lighting 
-    if min_dist < 1000. { // Draw distance
-        let mut diffuse_intensity = 0.;
-        let mut specular_intensity = 0.;
-        for light in &scene.lights {
-            let light_dir = (light.origin - surface_point).normalized();
-            diffuse_intensity += (light_dir * surface_normal) * light.intensity;
-            specular_intensity += (light_dir.reflect_on(&surface_normal) * ray.dir).min(0.).powf(surface_mat.phong_exp) * light.intensity;
-        }
-        return surface_mat.color * diffuse_intensity + Vec3::new(1., 1., 1.) * specular_intensity;
-    }
-    return Vec3 { x: 0.2, y: 0.2, z: 0.2 }; // Gray; miss
 }
