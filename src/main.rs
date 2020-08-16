@@ -11,16 +11,16 @@ struct Vec3 {
 
 impl Vec3 {
     fn new(x: f32, y: f32, z: f32) -> Self {
-        Vec3 { x: x, y: y, z: z }
+        Vec3 { x, y, z }
     }
 
     fn mag(&self) -> f32 {
-        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+        (*self * *self).sqrt()
     }
 
     fn normalized(&self) -> Self {
         let mag = self.mag();
-        Vec3 { x: self.x / mag, y: self.y / mag, z: self.z / mag }
+        return *self * (1. / mag);
     }
 
     fn reflect_on(&self, n: &Vec3) -> Self {
@@ -28,15 +28,14 @@ impl Vec3 {
     }
 
     fn origin() -> Self {
-        Vec3 { x: 0., y: 0., z: 0. }
+        Vec3::new(0., 0., 0.)
     }
 }
 
 impl ops::Mul<Vec3> for Vec3 {
     type Output = f32;
     fn mul(self, v: Vec3) -> f32 {
-        // Dot product
-        self.x * v.x + self.y * v.y + self.z * v.z
+        self.x * v.x + self.y * v.y + self.z * v.z // Dot product
     }
 }
 
@@ -111,22 +110,20 @@ struct Sphere {
 }
 
 impl Sphere {
-    fn new(c: Vec3, r: f32, m: Material) -> Self {
-        Sphere { center: c, radius: r, mat: m }
+    fn new(center: Vec3, radius: f32, mat: Material) -> Self {
+        Sphere { center, radius, mat }
     }
 
-    fn intersects_ray(&self, ray: &Ray, t_0: &mut f32 ) -> bool {
+    // Returns intersection distance along ray or None for no intersection
+    fn intersects_ray(&self, ray: &Ray) -> Option<f32> {
         let l = self.center - ray.origin;
         let pld = l * ray.dir.normalized();
         let d_2 = l * l - pld * pld;
-        if d_2 > self.radius.powi(2) {
-            return false;
-        }
+        if d_2 > self.radius.powi(2) { return None; }
         let td = (self.radius.powi(2) - d_2).sqrt();
-        *t_0 = pld - td;
+        let t_0 = pld - td;
         let t_1 = pld + td;
-        *t_0 = if *t_0 < 0. { t_1 } else { *t_0 };
-        return *t_0 > 0.;
+        if t_0 > 0. { Some(t_0) } else if t_1 > 0. { Some(t_1) } else { None }
     }
 }
 
@@ -143,12 +140,13 @@ fn scene_hit(ray: &Ray, scene: &Scene, max_dist: f32) -> Option<RaycastHit> {
     let mut surface_normal = Vec3::origin();
 
     for sphere in &scene.spheres {
-        let mut cur_dist = 0.;
-        if sphere.intersects_ray(ray, &mut cur_dist) && cur_dist < min_dist {
-            min_dist = cur_dist;
-            surface_mat = sphere.mat;
-            surface_point = ray.origin + ray.dir * cur_dist;
-            surface_normal = (surface_point - sphere.center).normalized();
+        if let Some(cur_dist) = sphere.intersects_ray(ray) {
+            if cur_dist < min_dist {
+                min_dist = cur_dist;
+                surface_mat = sphere.mat;
+                surface_point = ray.origin + ray.dir * cur_dist;
+                surface_normal = (surface_point - sphere.center).normalized();
+            }
         }
     }
     if min_dist < max_dist { // Max draw distance
@@ -173,7 +171,7 @@ fn raycast(ray: &Ray, scene: &Scene, depth: i32) -> Vec3 {
 
             // Reflect
             let reflect_dir = -ray.dir.reflect_on(&surface_normal).normalized();
-            let reflect_point = surface_point + surface_normal * 0.00001;
+            let reflect_point = surface_point + surface_normal * 0.001;
             let reflect_color = raycast(&Ray { origin: reflect_point, dir: reflect_dir }, &scene, depth + 1);  
 
             for light in &scene.lights {
@@ -181,8 +179,8 @@ fn raycast(ray: &Ray, scene: &Scene, depth: i32) -> Vec3 {
                 let light_dir = light_vec.normalized();
                 let light_dist = light_vec.mag();
 
-                // Check for shadow
-                let shadow_point = surface_point + surface_normal * 0.00001;
+                // Check if point is in shadow
+                let shadow_point = surface_point + surface_normal * 0.001;
                 if let Some(_hit) = scene_hit(&Ray { origin: shadow_point, dir: light_dir }, scene, light_dist) {
                     continue;
                 }
@@ -191,10 +189,16 @@ fn raycast(ray: &Ray, scene: &Scene, depth: i32) -> Vec3 {
                 specular_intensity += (light_dir.reflect_on(&surface_normal) * ray.dir).min(0.).powf(surface_mat.phong_exp) * light.intensity;
             }
 
-            return surface_mat.color * diffuse_intensity * surface_mat.diffuse_const + Vec3::new(1., 1., 1.) * specular_intensity * surface_mat.phong_const + surface_mat.color * surface_mat.ambient_const + reflect_color * surface_mat.reflectance;
+            let diffuse_color = surface_mat.color * diffuse_intensity * surface_mat.diffuse_const;
+            let specular_color = Vec3::new(1., 1., 1.) * specular_intensity * surface_mat.phong_const;
+            let ambient_color = surface_mat.color * surface_mat.ambient_const;
+            let reflection = reflect_color * surface_mat.reflectance;
+            return diffuse_color + specular_color + ambient_color + reflection;
         }
     }
-    return Vec3::new(0.3, 0.3, 0.3); // Background color
+
+    let height = ray.dir.y;
+    return Vec3::new(height, height, height); // Background color
 }
 
 fn main() -> std::io::Result<()> {
@@ -203,13 +207,15 @@ fn main() -> std::io::Result<()> {
     let fov = std::f32::consts::PI / 3.;
 
     // Scene construction
-    let m_blue = Material::new(Vec3::new(0.1, 0.1, 0.4), 50., 0.4, 1., 0.1, 0.0);
+    let m_blue = Material::new(Vec3::new(0.1, 0.1, 0.4), 40., 0.4, 1., 0.1, 0.0);
     let m_red = Material::new(Vec3::new(0.7, 0.02, 0.05), 250., 1., 1.2, 0.2, 0.);
-    let m_mirror = Material::new(Vec3::new(1., 1., 1.), 1500., 1., 0., 0., 0.7);
+    let m_mirror = Material::new(Vec3::new(1., 1., 1.), 1500., 1., 0., 0., 0.75);
+    let m_ground = Material::new(Vec3::new(0.2, 0.2, 0.2), 0., 0., 1., 0.1, 0.17);
     let mut spheres = Vec::new();
-    spheres.push(Sphere::new(Vec3::new(0., -1.25, -5.), 1., m_blue));
+    spheres.push(Sphere::new(Vec3::new(0., -1.25, -5.), 1., m_red));
     spheres.push(Sphere::new(Vec3::new(-2., -0.75, -7.), 1.2, m_mirror));
-    spheres.push(Sphere::new(Vec3::new(0.8, 0.45, -4.), 1., m_red));
+    spheres.push(Sphere::new(Vec3::new(0.8, 0.45, -4.), 1., m_blue));
+    spheres.push(Sphere::new(Vec3::new(0., -7_002.25, 0.), 7_000., m_ground));
     let mut lights = Vec::new();
     lights.push(PointLight { origin: Vec3::new(8., 8., 10.), intensity: 0.8 });
     lights.push(PointLight { origin: Vec3::new(-3., 4., 5.), intensity: 0.65 });
