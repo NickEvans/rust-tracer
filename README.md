@@ -1,7 +1,8 @@
 # rust-tracer
 A simple, in-progress ray-tracing algorithm implemented from scratch in Rust.
-![Sample Render](https://raw.githubusercontent.com/NickEvans/rust-tracer/master/render.png)
 Implements Phong model for diffuse and specular lighting, shadows, and mirror reflections.
+
+![Sample Render](https://raw.githubusercontent.com/NickEvans/rust-tracer/master/render.png)
 
 ## To Run
 ```
